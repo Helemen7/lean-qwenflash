@@ -237,6 +237,27 @@ def patch_hipify_none_paths() -> None:
     hipify_python._none_paths_patched = True
 
 
+def stage_sources(src_dir: str, dst_dir: str) -> str:
+    """
+    Copy a source tree into dst_dir (only files that changed) and return dst_dir. torch's JIT hipify only
+    rewrites sources that sit inside the build directory: on Windows, files elsewhere come back unchanged
+    (hipified_path None), so a ROCm build compiles untranslated CUDA includes. Staging them there fixes it.
+    """
+    import shutil
+    src_dir, dst_dir = os.path.abspath(src_dir), os.path.abspath(dst_dir)
+    for root, dirs, files in os.walk(src_dir):
+        rel = os.path.relpath(root, src_dir)
+        out = dst_dir if rel == "." else os.path.join(dst_dir, rel)
+        os.makedirs(out, exist_ok = True)
+        for f in files:
+            if is_hipify_output(f):
+                continue
+            a, b = os.path.join(root, f), os.path.join(out, f)
+            if not os.path.exists(b) or os.stat(a).st_mtime_ns != os.stat(b).st_mtime_ns or os.stat(a).st_size != os.stat(b).st_size:
+                shutil.copy2(a, b)
+    return dst_dir
+
+
 def hip_include_flags(sources_dir: str) -> list[str]:
     """
     Flags for every translation unit of a ROCm build, host C++ and HIP alike: force-include the compat

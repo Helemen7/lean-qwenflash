@@ -57,6 +57,8 @@ def ext():
         here = os.path.join(root, "kernels", "nv2")   # nv2_host.cpp, nv2_dev.cu, nv2_shared.h, ft_core.h
         d = os.environ.get("QWEN38_NV2_BUILD", os.path.join(root, "build", "nv2"))
         os.makedirs(d, exist_ok=True)
+        if plat.IS_WIN and torch.version.hip:
+            here = plat.stage_tree(here, os.path.join(d, "src"))   # hipify only rewrites sources inside the build dir
         _EXT = load(name="qwen38_nv2", sources=[os.path.join(here, "nv2_host.cpp"), os.path.join(here, "nv2_dev.cu")],
                     build_directory=d, extra_cflags=plat.cxx_flags() + ["-I" + here],
                     extra_cuda_cflags=plat.cuda_flags("-I" + here), extra_ldflags=plat.ld_flags(), verbose=False)

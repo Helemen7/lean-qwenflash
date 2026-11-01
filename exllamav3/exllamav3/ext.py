@@ -6,7 +6,7 @@ from torch.utils.cpp_extension import load
 import os
 import sys
 from .util.arch_list import maybe_set_arch_list_env
-from .util.cuda_flags import cuda_cflags, extension_sources, hip_include_flags, patch_hip_ninja_file_writer, patch_hipify_none_paths, use_rocm_sdk_devel
+from .util.cuda_flags import cuda_cflags, extension_sources, hip_include_flags, patch_hip_ninja_file_writer, patch_hipify_none_paths, stage_sources, use_rocm_sdk_devel
 
 extension_name = "exllamav3_ext"
 verbose = False  # Print wall of text when compiling
@@ -150,6 +150,11 @@ else:
 
     library_dir = os.path.dirname(os.path.abspath(__file__))
     sources_dir = os.path.join(library_dir, extension_name)
+    build_directory = None
+    if windows and torch.version.hip:
+        # torch hipifies only sources inside the build directory (see stage_sources)
+        build_directory = torch.utils.cpp_extension._get_build_directory(extension_name, False)
+        sources_dir = stage_sources(sources_dir, os.path.join(build_directory, "src"))
     sources = extension_sources(sources_dir, hip = bool(torch.version.hip))
     if torch.version.hip:
         # With no target list, torch builds for every architecture it supports, wave64 ones included, which
@@ -178,6 +183,7 @@ else:
     try:
         exllamav3_ext = load(
             name = extension_name,
+            build_directory = build_directory,
             sources = sources,
             extra_include_paths = [sources_dir],
             verbose = verbose,

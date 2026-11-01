@@ -208,6 +208,20 @@ def patch_hipify_none_paths():
     hipify_python._none_paths_patched = True
 
 
+def stage_tree(src_dir, dst_dir):
+    """Copy changed files of src_dir into dst_dir, return dst_dir (see exllamav3.util.cuda_flags.stage_sources)."""
+    import shutil
+    for root, _, files in os.walk(src_dir):
+        rel = os.path.relpath(root, src_dir)
+        out = dst_dir if rel == "." else os.path.join(dst_dir, rel)
+        os.makedirs(out, exist_ok=True)
+        for f in files:
+            a, b = os.path.join(root, f), os.path.join(out, f)
+            if not os.path.exists(b) or os.stat(a).st_mtime_ns != os.stat(b).st_mtime_ns or os.stat(a).st_size != os.stat(b).st_size:
+                shutil.copy2(a, b)
+    return dst_dir
+
+
 def cuda_flags(*extra):
     # nvcc on Windows: pass /Zc:__cplusplus to the MSVC host compiler (hipcc takes no -Xcompiler)
     import torch
