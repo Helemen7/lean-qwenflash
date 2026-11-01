@@ -11,6 +11,9 @@
 !/memory_guard.py
 !/download_http.py
 !/compile_local.py
+!/windows_check.py
+!/setup_windows.ps1
+!/setup_windows.bat
 !/append_mtp.py
 !/test_*.py
 /test_qwen_thinking.py

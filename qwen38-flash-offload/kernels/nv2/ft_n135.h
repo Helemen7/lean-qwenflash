@@ -224,8 +224,8 @@ void rect(const Mat& mat, int r0, int R, int t0, int C, const void* const* xin, 
     static thread_local int32_t* acci = nullptr;
     if (!accf)
     {
-        accf = static_cast<float*>(std::aligned_alloc(64, size_t(MAXCT) * 64 * 8 * 4));
-        acci = static_cast<int32_t*>(std::aligned_alloc(64, size_t(MAXCT) * 64 * 8 * 4));
+        accf = static_cast<float*>(qw_aligned_alloc(64, size_t(MAXCT) * 64 * 8 * 4));
+        acci = static_cast<int32_t*>(qw_aligned_alloc(64, size_t(MAXCT) * 64 * 8 * 4));
     }
     const size_t nacc = size_t(C) * 64 * M;
     std::memset(accf, 0, nacc * 4);
@@ -425,7 +425,7 @@ template <int M>
 void rect_rt2(const Mat& mat, int r0, int R, int t0, int C, const void* const* xin, const float* const* qs, float* y, size_t ldy)
 {
     static thread_local float* accf = nullptr;
-    if (!accf) accf = static_cast<float*>(std::aligned_alloc(64, size_t(MAXCT) * 64 * 8 * 4));
+    if (!accf) accf = static_cast<float*>(qw_aligned_alloc(64, size_t(MAXCT) * 64 * 8 * 4));
     std::memset(accf, 0, size_t(C) * 64 * M * 4);
     const Consts K = consts();
     const int tiles_n = mat.n / 16, tk = mat.k / 16;
@@ -465,7 +465,7 @@ template <int KK>
 void rect_rt1(const Mat& mat, int r0, int R, int t0, int C, const void* const* xin, const float* const* qs, float* y, size_t ldy)
 {
     static thread_local float* accf = nullptr;
-    if (!accf) accf = static_cast<float*>(std::aligned_alloc(64, size_t(MAXCT) * 64 * 4));
+    if (!accf) accf = static_cast<float*>(qw_aligned_alloc(64, size_t(MAXCT) * 64 * 4));
     std::memset(accf, 0, size_t(C) * 64 * 4);
     const KP P = kp();
     const Consts K = consts();

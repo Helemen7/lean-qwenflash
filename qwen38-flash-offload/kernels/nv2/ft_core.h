@@ -1,11 +1,6 @@
 // FreeToken CPU tier core (AVX2 mul1 K=3 expert kernels, pool, reference). See ft_mul1_avx2.cpp for notes.
 #pragma once
-#include <immintrin.h>
-#include <pthread.h>
-#include <sched.h>
-#include <sys/mman.h>
-#include <fcntl.h>
-#include <unistd.h>
+#include "portable.h"
 
 #include <algorithm>
 #include <atomic>
@@ -428,7 +423,7 @@ struct Pool
     void* ctx = nullptr;
     std::atomic<bool> quit{false};
 
-    static void pin(int cpu) { cpu_set_t s; CPU_ZERO(&s); CPU_SET(cpu, &s); pthread_setaffinity_np(pthread_self(), sizeof(s), &s); }
+    static void pin(int cpu) { qw_pin_thread(cpu); }
 
     void start(int threads, const std::vector<int>& cpus)
     {
@@ -464,20 +459,7 @@ struct Pool
     void stop() { quit = true; for (auto& t : th) t.join(); }
 };
 
-std::vector<int> cpu_order()   // physical cores first, SMT siblings after
-{
-    std::vector<int> first, sib; std::vector<std::pair<int, int>> seen;
-    const int ncpu = int(std::thread::hardware_concurrency());
-    for (int c = 0; c < ncpu; ++c)
-    {
-        std::ifstream f("/sys/devices/system/cpu/cpu" + std::to_string(c) + "/topology/core_id"); int core = -1; f >> core;
-        std::ifstream f2("/sys/devices/system/cpu/cpu" + std::to_string(c) + "/topology/physical_package_id"); int pk = 0; f2 >> pk;
-        auto key = std::make_pair(pk, core);
-        if (std::find(seen.begin(), seen.end(), key) == seen.end()) { seen.push_back(key); first.push_back(c); } else sib.push_back(c);
-    }
-    first.insert(first.end(), sib.begin(), sib.end());
-    return first;
-}
+std::vector<int> cpu_order() { return qw_cpu_order(); }
 
 // ------------------------------------------------------------------------------------------
 // Layer storage + MoE forward (m tokens, per-token list of (expert, weight))
@@ -492,14 +474,7 @@ struct Layer
     int H = 4096, I = 2048;
 };
 
-void* big_alloc(size_t bytes)
-{
-    void* p = nullptr;
-    const size_t al = size_t(2) << 20;
-    if (posix_memalign(&p, al, (bytes + al - 1) / al * al)) { perror("alloc"); exit(1); }
-    madvise(p, bytes, MADV_HUGEPAGE);
-    return p;
-}
+void* big_alloc(size_t bytes) { return qw_big_alloc(bytes); }
 
 void swizzle_layer(Layer& L);
 Layer load_layer(const std::string& manifest, int max_experts)
@@ -532,10 +507,7 @@ Layer load_layer(const std::string& manifest, int max_experts)
             uint8_t* sc = base + 3 * (tb + pad) + pi * (4096 + 2048) * 2;
             dst = r.kind == "suh" ? sc : sc + (pi == 2 ? 2048 : 4096) * 2;
         }
-        int fd = open(r.file.c_str(), O_RDONLY);
-        size_t got = 0;
-        while (got < r.nb) { ssize_t k = pread(fd, dst + got, r.nb - got, r.off + got); if (k <= 0) { perror("pread"); exit(1); } got += k; }
-        close(fd);
+        if (!qw_read_file_at(r.file.c_str(), dst, r.nb, r.off)) { perror("read"); exit(1); }
     }
     for (int e = 0; e < E; ++e)
     {

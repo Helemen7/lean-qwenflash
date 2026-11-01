@@ -8,6 +8,7 @@
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <cuda_fp16.h>
+#include "gpu_compat.cuh"
 
 // policy p[]: 0 t_zc (ms per zero-copy miss incl. its GPU compute), 1 t_hit (ms per GPU-resident expert),
 // 2 cpu_a (ms fixed per CPU job incl. handoff), 3 cpu_b (ms per CPU expert), 4 cpu_tok (extra fraction per extra
@@ -114,11 +115,11 @@ __global__ void ft_combine_k(void* out, int is_half, int n, const long long* __r
         if (go)
         {
             unsigned long long t0, t1;
-            asm volatile("mov.u64 %0, %%globaltimer;" : "=l"(t0));
+            t0 = qw_gtime_ns();
             t1 = t0;
             while (ctrl[1] < s)
             {
-                asm volatile("mov.u64 %0, %%globaltimer;" : "=l"(t1));
+                t1 = qw_gtime_ns();
                 if ((long long) (t1 - t0) > timeout_ns) { go = 0; if (blockIdx.x == 0) atomicAdd((unsigned long long*) &stats[6], 1ull); break; }
             }
             if (blockIdx.x == 0) { atomicAdd((unsigned long long*) &stats[4], (unsigned long long) (t1 - t0)); atomicAdd((unsigned long long*) &stats[5], 1ull); }
@@ -128,7 +129,7 @@ __global__ void ft_combine_k(void* out, int is_half, int n, const long long* __r
     if (!go) return;
     for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += gridDim.x * blockDim.x)
     {
-        const float v = __ldcv(hout + i);
+        const float v = QW_LDCV(hout + i);
         if (is_half) { __half* o = (__half*) out; o[i] = __float2half(__half2float(o[i]) + v); }
         else ((float*) out)[i] += v;
     }

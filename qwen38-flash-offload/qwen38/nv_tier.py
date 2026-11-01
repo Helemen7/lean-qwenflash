@@ -24,6 +24,7 @@ Env: QWEN38_NV_STORE (store .bin), QWEN38_NV_RAM_GB (RAM tier; default auto = me
 import collections, concurrent.futures as cf, ctypes, json, mmap, os, re, threading, time
 import numpy as np
 import torch
+import plat
 
 _SRC = r"""
 #include <torch/extension.h>
@@ -34,8 +35,28 @@ _SRC = r"""
 #include <mutex>
 #include <condition_variable>
 #include <vector>
-#include <unistd.h>
 #include <errno.h>
+#include <string.h>
+#ifdef _WIN32
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <io.h>
+typedef SSIZE_T ssize_t;
+static ssize_t qw_pread(int fd, void* buf, size_t len, long long off) {
+    HANDLE h = (HANDLE) _get_osfhandle(fd);
+    if (h == INVALID_HANDLE_VALUE) { errno = EBADF; return -1; }
+    if (len > (size_t(1) << 30)) len = size_t(1) << 30;
+    OVERLAPPED ov; memset(&ov, 0, sizeof(ov));
+    ov.Offset = DWORD((unsigned long long) off & 0xFFFFFFFFull); ov.OffsetHigh = DWORD((unsigned long long) off >> 32);
+    DWORD n = 0;
+    if (!ReadFile(h, buf, DWORD(len), &n, &ov)) { if (GetLastError() == ERROR_HANDLE_EOF) return 0; errno = EIO; return -1; }
+    return (ssize_t) n;
+}
+#else
+#include <unistd.h>
+static ssize_t qw_pread(int fd, void* buf, size_t len, long long off) { return pread(fd, buf, len, (off_t) off); }
+#endif
 #include <chrono>
 namespace py = pybind11;
 
@@ -59,7 +80,7 @@ static void worker() {
         }
         long long done = 0; int err = 0;
         while (done < p.len) {
-            ssize_t r = pread(p.fd, (void*) (p.dst + done), (size_t) (p.len - done), (off_t) (p.off + done));
+            ssize_t r = qw_pread(p.fd, (void*) (p.dst + done), (size_t) (p.len - done), (long long) (p.off + done));
             if (r < 0) { if (errno == EINTR) continue; err = errno; break; }
             if (r == 0) { err = -1; break; }
             done += r;
@@ -246,30 +267,13 @@ def _ext():
         src = os.path.join(d, "nv.cu")
         if not os.path.exists(src) or open(src).read() != _SRC:
             open(src, "w").write(_SRC)
-        _EXT = load(name="qwen38_nv", sources=[src], build_directory=d, extra_cuda_cflags=["-O3"], verbose=False)
+        _EXT = load(name="qwen38_nv", sources=[src], build_directory=d, extra_cuda_cflags=plat.cuda_flags(), verbose=False)
     return _EXT
 
 
 def cgroup_mem():
-    """memcg numbers (GiB) + host MemAvailable (GiB)."""
-    out = {}
-    try:
-        cg = os.environ.get("QWEN_MEMORY_CGROUP", "/sys/fs/cgroup")
-        out["current"] = int(open(f"{cg}/memory.current").read()) / GiB
-        if os.path.exists(f"{cg}/memory.peak"):
-            out["peak"] = int(open(f"{cg}/memory.peak").read()) / GiB
-        mx = open(f"{cg}/memory.max").read().strip()
-        out["max"] = int(mx) / GiB if mx != "max" else None
-        for line in open(f"{cg}/memory.stat"):
-            k, v = line.split()
-            if k in ("anon", "file", "kernel", "shmem", "unevictable", "pagetables", "slab"):
-                out[k] = int(v) / GiB
-    except OSError:
-        pass
-    for line in open("/proc/meminfo"):
-        if line.startswith("MemAvailable"):
-            out["host_avail"] = int(line.split()[1]) / 1048576
-    return {k: (round(v, 3) if isinstance(v, float) else v) for k, v in out.items()}
+    """memcg numbers (GiB) + host MemAvailable (GiB); Windows: process working set / total RAM."""
+    return plat.cgroup_mem()
 
 
 def _log(msg):
@@ -310,7 +314,7 @@ class HostArena:
         left = nslots
         while left > 0:
             k = min(left, chunk_slots)
-            mm = mmap.mmap(-1, k * slot_bytes, flags=mmap.MAP_PRIVATE | mmap.MAP_ANONYMOUS)
+            mm = plat.anon_alloc(k * slot_bytes)
             a = ctypes.addressof(ctypes.c_char.from_buffer(mm))
             assert a % 4096 == 0
             with torch.cuda.device(dev_idx):
@@ -423,7 +427,7 @@ class NvTier:
         self.piece = int(os.environ.get("QWEN38_NV_PIECE_KB", "2304")) * 1024
         assert self.piece % 4096 == 0
         e.io_start(self.threads)
-        self.fd = os.open(self.store, os.O_RDONLY | os.O_DIRECT)
+        self.fd = plat.open_direct(self.store)
         dev_idx = self.dev.index or 0
         # placeholder home: zeros in VRAM (never the bytes of any expert; nv_check counts reads of it)
         self.ph_t = torch.zeros(self.slot, dtype=torch.uint8, device=self.dev)
@@ -746,7 +750,7 @@ def _drop_checkpoint_cache():
     nd = 0
     for f in sorted(_LOAD["files"]):
         try:
-            fd = os.open(f, os.O_RDONLY); os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED); os.close(fd); nd += 1
+            plat.drop_file_cache(f); nd += 1
         except OSError:
             pass
     return nd

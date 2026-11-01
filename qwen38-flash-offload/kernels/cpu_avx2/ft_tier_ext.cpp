@@ -40,9 +40,9 @@ void tier_init(int64_t threads, std::vector<int64_t> cpus, torch::Tensor ctrl, t
     init_perm(); init_tables();
     T = new Tier();
     std::vector<int> c(cpus.begin(), cpus.end());
-    cpu_set_t saved; sched_getaffinity(0, sizeof(saved), &saved);
+    const QwAffinity saved = qw_get_affinity();
     T->pool.start(int(threads), c);          // pins the calling thread to c[0]; the worker thread takes that role
-    sched_setaffinity(0, sizeof(saved), &saved);   // give the Python thread its affinity back
+    qw_set_affinity(saved);   // give the Python thread its affinity back
     T->ctrl = reinterpret_cast<volatile int64_t*>(ctrl.data_ptr<int64_t>());
     T->hx = reinterpret_cast<const uint16_t*>(hx.data_ptr());
     T->picks = picks.data_ptr<int32_t>();

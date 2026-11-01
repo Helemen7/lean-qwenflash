@@ -67,6 +67,44 @@ Compile the native offload extensions:
 python compile_local.py
 ```
 
+### 1b. Windows (NVIDIA, native)
+
+Needs Windows 10/11 x64, an NVIDIA GPU (16 GB VRAM), an NVMe SSD, Python 3.10-3.12, the CUDA 12.4+ toolkit
+and Visual Studio 2022 Build Tools ("Desktop development with C++"). Use an "x64 Native Tools Command Prompt".
+
+```bat
+git clone https://github.com/MaxDevv/lean-qwenflash.git
+cd lean-qwenflash
+py -3.12 -m venv .venv
+.venv\Scripts\activate
+pip install torch --index-url https://download.pytorch.org/whl/cu128
+pip install fastapi uvicorn safetensors jinja2 huggingface_hub triton-windows
+pip install -e exllamav3
+python compile_local.py
+```
+
+Then follow steps 3 and 4 with `python` and backslash paths. What changes on Windows:
+* No cgroups: RAM is limited by `--ram-gb` and enforced against the process working set (`QWEN_RAM_LIMIT_BYTES`, default 16e9).
+* The store is read with `FILE_FLAG_NO_BUFFERING` (the Windows counterpart of `O_DIRECT`); keep it on NVMe.
+* Thread pinning uses `SetThreadAffinityMask` (first 64 logical CPUs). The defaults in `qwen_offload.py` assume at least 12.
+* The Intel B70 co-processor path is Linux-only.
+* **GPU timeout (TDR):** the nv2 kernels spin on host replies for up to `QWEN38_NV_TIMEOUT_S` (5 s). Windows resets a GPU
+  kernel after `TdrDelay` (2 s by default), which looks like a hang or a driver reset. Raise it once (admin, then reboot):
+  `reg add HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers /v TdrDelay /t REG_DWORD /d 60 /f`
+* This port is untested on real hardware.
+
+### 1c. AMD (ROCm/HIP, experimental)
+
+Same steps as 1b, but with a ROCm build of PyTorch (HIP SDK + AMD's Windows or Linux wheels) instead of `cu128`.
+The offload extensions are hipified by `torch.utils.cpp_extension`; `PYTORCH_ROCM_ARCH` is set from the GPU
+(`gfx1101` on an RX 7800 XT). Device-side differences live in `kernels/*/gpu_compat.cuh` (wall clock instead of
+PTX `globaltimer`, `s_sleep` instead of `__nanosleep`). Known limits, all untested on hardware:
+* ExLlamaV3 on ROCm skips the PTX-only kernels (`hgemm_f16acc`, `exl3_moe_inst_*_m32/_m64`); RDNA uses its own GEMM/GEMV.
+* The wall-clock rate is assumed to be 100 MHz (`-DQW_WALLCLOCK_KHZ` overrides it); device waits time out wrongly otherwise.
+* `k_hcfuse.py` uses a PTX named barrier and is not available on ROCm; it is off by default.
+* Attention/cache kernels are Triton: Triton must support your ROCm + OS combination.
+* The Windows display driver resets long-running kernels (see TDR above) on AMD as well.
+
 ### 3. Download & Build Store
 
 Download the 3.05bpw checkpoint and N-gram table (~85 GB total):

@@ -10,9 +10,15 @@ parser.add_argument('--model-dir', type=Path,
 args=parser.parse_args()
 root=args.model_dir.expanduser(); root.mkdir(parents=True,exist_ok=True)
 base=root.parent
+WIN=os.name=='nt'
 cg=Path(os.environ.get('QWEN_DOWNLOAD_CGROUP','/sys/fs/cgroup/qwen-download'))
-if os.environ.get('QWEN_DOWNLOAD_JOIN_CGROUP','0')=='1':
+if not WIN and os.environ.get('QWEN_DOWNLOAD_JOIN_CGROUP','0')=='1':
  (cg/'cgroup.procs').write_text(str(os.getpid()))
+_wlock=threading.Lock()
+def pwrite(fd,data,pos):
+ if not WIN: return os.pwrite(fd,data,pos)
+ with _wlock:
+  os.lseek(fd,pos,os.SEEK_SET); return os.write(fd,data)
 repo='turboderp/Qwen3.8-Flash-Next-exl3'; branch='3.05bpw_h5_ng5'
 info=HfApi().model_info(repo,revision=branch,files_metadata=True)
 assert info.sha=='69e33439ae950f17bcbe95c98f117d80f759ab6d'
@@ -22,9 +28,14 @@ for s in info.siblings:
  size=s.size; u=f'https://huggingface.co/{repo}/resolve/{branch}/{s.rfilename}'
  with urllib.request.urlopen(urllib.request.Request(u,method='HEAD')) as r: url=r.geturl()
  part=root/(s.rfilename+'.http-part'); state=root/(s.rfilename+'.http-state.json')
- fd=os.open(part,os.O_CREAT|os.O_RDWR|os.O_DIRECT,0o644)
- os.ftruncate(fd,(size+4095)//4096*4096)
- os.posix_fallocate(fd,0,(size+4095)//4096*4096)
+ if WIN:
+  fd=os.open(part,os.O_CREAT|os.O_RDWR|os.O_BINARY,0o644)
+  os.lseek(fd,(size+4095)//4096*4096-1,os.SEEK_SET)
+  if os.fstat(fd).st_size<(size+4095)//4096*4096: os.write(fd,b'\0')
+ else:
+  fd=os.open(part,os.O_CREAT|os.O_RDWR|os.O_DIRECT,0o644)
+  os.ftruncate(fd,(size+4095)//4096*4096)
+  os.posix_fallocate(fd,0,(size+4095)//4096*4096)
  done=set(json.loads(state.read_text())) if state.exists() else set()
  files[s.rfilename]={'size':size,'fd':fd,'part':part,'state':state,'done':done,'count':(size+chunk-1)//chunk,'sha256':s.lfs.sha256 if s.lfs else None}
  for i in range((size+chunk-1)//chunk):
@@ -49,7 +60,7 @@ def get(job):
       n=r.readinto(buf[got:need]); assert n>0, 'Short HTTP range response'; got+=n
      padded=(need+4095)//4096*4096
      if padded>need: buf[need:padded]=bytes(padded-need)
-     assert os.pwrite(fd,buf[:padded],pos)==padded
+     assert pwrite(fd,buf[:padded],pos)==padded
      pos+=need
     assert pos==end+1
    return name,i,end-start+1
@@ -63,7 +74,10 @@ with cf.ThreadPoolExecutor(32) as ex:
   if len(d['done'])%16==0 or len(d['done'])==d['count']:
    tmp=d['state'].with_suffix('.tmp'); tmp.write_text(json.dumps(sorted(d['done']))); tmp.replace(d['state'])
   if len(d['done'])==d['count']:
-   os.ftruncate(d['fd'],d['size']); os.fsync(d['fd']); os.close(d['fd'])
+   if WIN:
+    os.lseek(d['fd'],0,os.SEEK_SET); os.close(d['fd']); os.truncate(d['part'],d['size'])
+   else:
+    os.ftruncate(d['fd'],d['size']); os.fsync(d['fd']); os.close(d['fd'])
    d['part'].replace(root/name); print('COMPLETE',name,flush=True)
   if j%32==0: print('HTTP_PROGRESS',round(downloaded/1e9,2),'GB',round(time.monotonic()-t0,1),'s',round(downloaded/(time.monotonic()-t0)/1e9,3),'GB/s',flush=True)
 result={'seconds':time.monotonic()-t0,'bytes':downloaded,'revision':info.sha,'files':{k:{'size':v['size'],'sha256':v['sha256']} for k,v in files.items()}}

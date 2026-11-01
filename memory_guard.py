@@ -3,7 +3,10 @@ import ctypes as C
 import threading
 import time
 import os
+import sys
 from pathlib import Path
+sys.path.insert(0,str(Path(__file__).resolve().parent/"qwen38-flash-offload"/"qwen38"))
+import plat
 
 class HostMemory:
     """Sample cgroup RAM, including file cache, and enforce the runtime limit."""
@@ -14,7 +17,9 @@ class HostMemory:
         # The sampler below still enforces self.limit.
         self.thread=threading.Thread(target=self._run,daemon=True); self.thread.start()
     def sample(self):
-        used=int((self.path/'memory.current').read_text()); self.peak=max(self.peak,used)
+        # Windows has no cgroup: use this process' working set (pinned arenas included).
+        used=plat.process_ram_bytes() if plat.IS_WIN else int((self.path/'memory.current').read_text())
+        self.peak=max(self.peak,used)
         return used
     def _run(self):
         while self.running:
@@ -29,13 +34,23 @@ class DeviceMemory:
     class Info(C.Structure):
         _fields_=[('total',C.c_ulonglong),('free',C.c_ulonglong),('used',C.c_ulonglong)]
     def __init__(self,limit=16_000_000_000):
-        self.lib=C.CDLL('libnvidia-ml.so.1')
-        assert self.lib.nvmlInit_v2()==0
-        self.handle=C.c_void_p()
-        assert self.lib.nvmlDeviceGetHandleByIndex_v2(0,C.byref(self.handle))==0
+        self.lib=None
+        names=['nvml.dll',r'C:\Program Files\NVIDIA Corporation\NVSMI\nvml.dll'] if plat.IS_WIN else ['libnvidia-ml.so.1']
+        for n in names:
+            try: self.lib=C.CDLL(n); break
+            except OSError: pass
+        if self.lib is not None:
+            assert self.lib.nvmlInit_v2()==0
+            self.handle=C.c_void_p()
+            assert self.lib.nvmlDeviceGetHandleByIndex_v2(0,C.byref(self.handle))==0
         self.limit=limit; self.peak=0; self.running=True
         self.thread=threading.Thread(target=self._run,daemon=True); self.thread.start()
     def sample(self):
+        if self.lib is None:
+            # No NVML: total minus free from the CUDA runtime (counts every allocation on the device).
+            import torch
+            free,total=torch.cuda.mem_get_info(); used=total-free
+            self.peak=max(self.peak,used); return used
         info=self.Info()
         assert self.lib.nvmlDeviceGetMemoryInfo(self.handle,C.byref(info))==0
         self.peak=max(self.peak,info.used)

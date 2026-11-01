@@ -31,6 +31,7 @@ import collections, concurrent.futures as cf, ctypes, json, mmap, os, signal, th
 import numpy as np
 import torch
 import nv_tier as NT
+import plat
 
 GiB = 1024 ** 3
 _EXT = None
@@ -56,9 +57,8 @@ def ext():
         d = os.environ.get("QWEN38_NV2_BUILD", os.path.join(root, "build", "nv2"))
         os.makedirs(d, exist_ok=True)
         _EXT = load(name="qwen38_nv2", sources=[os.path.join(here, "nv2_host.cpp"), os.path.join(here, "nv2_dev.cu")],
-                    build_directory=d, extra_cflags=["-O3", "-mavx2", "-mfma", "-mf16c", "-mtune=znver3", "-std=c++17",
-                                                     "-I" + here],
-                    extra_cuda_cflags=["-O3", "-I" + here], extra_ldflags=["-lpthread"], verbose=False)
+                    build_directory=d, extra_cflags=plat.cxx_flags() + ["-I" + here],
+                    extra_cuda_cflags=plat.cuda_flags("-I" + here), extra_ldflags=plat.ld_flags(), verbose=False)
     return _EXT
 
 
@@ -66,7 +66,7 @@ def _mapped(nbytes, dev_idx, tag):
     """One page-aligned anon region, cudaHostRegister(Mapped); UVA alias == host address (checked)."""
     from exllamav3.ext import exllamav3_ext as xe
     nbytes = (nbytes + 4095) // 4096 * 4096
-    mm = mmap.mmap(-1, nbytes, flags=mmap.MAP_PRIVATE | mmap.MAP_ANONYMOUS)
+    mm = plat.anon_alloc(nbytes)
     a = ctypes.addressof(ctypes.c_char.from_buffer(mm))
     with torch.cuda.device(dev_idx):
         r = torch.cuda.cudart().cudaHostRegister(a, nbytes, 2)
@@ -124,7 +124,7 @@ class Nv2:
         self._pfb = {}
         self._pfb = {}
         self.elastic_wb = self.wb_on and g("QWEN38_NV_ELASTIC_WB", "1") == "1"
-        self.fd = os.open(self.store, os.O_RDONLY | os.O_DIRECT)
+        self.fd = plat.open_direct(self.store)
         self.ph_t = torch.zeros(self.slot, dtype=torch.uint8, device=self.dev)
         self.ph = self.ph_t.data_ptr()
         self.bounce_t, self.bounce = NT._BOUNCE[dev_idx]

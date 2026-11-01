@@ -15,9 +15,10 @@
 #include <c10/cuda/CUDAGuard.h>
 #include <cuda_fp16.h>
 #include "nv2_shared.h"
+#include "gpu_compat.cuh"
 using namespace nv2s;
 
-__device__ __forceinline__ unsigned long long gtime() { unsigned long long t; asm volatile("mov.u64 %0, %%globaltimer;" : "=l"(t)); return t; }
+__device__ __forceinline__ unsigned long long gtime() { return qw_gtime_ns(); }
 __device__ __forceinline__ long long ldv64(const volatile long long* p) { return *p; }
 
 __global__ void nv_pub_k(const int64_t* __restrict__ sel, const __half* __restrict__ w, const __half* __restrict__ z,
@@ -370,7 +371,7 @@ __global__ void nv_copy_k(const int* __restrict__ ctl, const int* __restrict__ j
                 while (ram_res[key] != 1)
                 {
                     if ((long long) (gtime() - t0) > timeout_ns) { hc[HC_ERR] = 3; atomicAdd(&stats[ST_TIMEOUT], 1ull); break; }
-                    __nanosleep(500);
+                    QW_NANOSLEEP(500);
                 }
             }
             const long long h0 = home_all[key * 3], h1 = home_all[key * 3 + 1], h2 = home_all[key * 3 + 2];
@@ -402,7 +403,7 @@ __global__ void nv_copy_k(const int* __restrict__ ctl, const int* __restrict__ j
                 while (ram_res[key] != 1)
                 {
                     if ((long long) (gtime() - t0) > timeout_ns) { hc[HC_ERR] = 4; atomicAdd(&stats[ST_TIMEOUT], 1ull); break; }
-                    __nanosleep(500);
+                    QW_NANOSLEEP(500);
                 }
                 if (blockIdx.x == 0) { atomicAdd(&stats[ST_CWAITNS], gtime() - t0); atomicAdd(&stats[ST_CWAITS], 1ull); }
             }
@@ -472,7 +473,7 @@ __global__ void nv_combine_k(void* out, int is_half, int n, const long long* __r
     if (!go) return;
     for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += gridDim.x * blockDim.x)
     {
-        const float v = __ldcv(hout + i);
+        const float v = QW_LDCV(hout + i);
         if (is_half) { __half* o = (__half*) out; o[i] = __float2half(__half2float(o[i]) + v); }
         else ((float*) out)[i] += v;
     }

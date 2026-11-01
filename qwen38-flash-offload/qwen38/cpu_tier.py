@@ -19,6 +19,7 @@ Env: QWEN38_CPU_TIER=1, QWEN38_CT_THREADS (default: number of CPUs in QWEN38_CT_
      QWEN38_CT_VALIDATE (0; 1 = panel through the CPU kernel: all misses of every forward <= QWEN38_CT_MAXBSZ tokens), QWEN38_CT_HANDSHAKE (0), QWEN38_CT_SELFTEST (1)
 Hook (serve.py): cpu_tier.wrap(model) before expert_cache.attach(model); cpu_tier.start() after it; /stats: summary().
 """
+import plat
 import json, os, time
 import torch
 
@@ -37,26 +38,17 @@ def _build():
     d = os.environ.get("QWEN38_CT_BUILD", os.path.join(os.path.dirname(_HERE), "build", "ct"))
     os.makedirs(d, exist_ok=True)
     # Portable ISA flags (AVX2 + FMA + F16C is all the kernel uses); the campaign build used -march=znver3.
-    isa = os.environ.get("QWEN38_CT_CFLAGS", "-mavx2 -mfma -mf16c -mtune=znver3").split()
+    isa = os.environ.get("QWEN38_CT_CFLAGS", "").split()
     _H = load(name="ft_tier_host", sources=[os.path.join(_KDIR, "ft_tier_ext.cpp")], build_directory=d,
-              extra_cflags=["-O3", *isa, "-std=c++17", "-I" + _KDIR], extra_ldflags=["-lpthread"], verbose=False)
+              extra_cflags=plat.cxx_flags() + isa + ["-I" + _KDIR], extra_ldflags=plat.ld_flags(), verbose=False)
     _CU = load(name="ft_tier_cu", sources=[os.path.join(_KDIR, "ft_tier_cu.cu")], build_directory=d,
-               extra_cuda_cflags=["-O3"], verbose=False)
+               extra_cuda_cflags=plat.cuda_flags(), verbose=False)
 
 
 def auto_cpus(skip=2):
     """One logical CPU per physical core (first SMT sibling) among the CPUs this process may run on, minus the first
     `skip` cores (left to the GPU-feeding Python thread and the OS). On a 24-core EPYC 7443P with SMT: 2-23 (22)."""
-    allowed = sorted(os.sched_getaffinity(0))
-    seen, firsts = set(), []
-    for c in allowed:
-        try:
-            core = open(f"/sys/devices/system/cpu/cpu{c}/topology/core_id").read().strip()
-            pkg = open(f"/sys/devices/system/cpu/cpu{c}/topology/physical_package_id").read().strip()
-        except OSError:
-            core, pkg = str(c), "0"
-        if (pkg, core) not in seen:
-            seen.add((pkg, core)); firsts.append(c)
+    firsts = plat.physical_core_order(plat.get_affinity(), only_first=True)
     return firsts[skip:] if len(firsts) > skip + 1 else firsts[-1:]
 
 

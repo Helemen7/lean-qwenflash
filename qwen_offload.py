@@ -23,9 +23,14 @@ def load(model_dir, store, chunk=2048, cache_tokens=16384, ram_gb=6.0, cpu=False
         'QWEN38_EC_ELASTIC_GB': '6', 'QWEN38_EC_RESERVE_GB': '1.7',
         'QWEN38_NV_COPY_GRID': '24', 'QWEN38_EC_COPY_GRID': '24',
         'EXL3_NGRAM_STREAM': '1', 'QWEN_VRAM_LIMIT_BYTES': '16000000000',
-        'MAX_JOBS': '4', 'TORCH_CUDA_ARCH_LIST': '8.9',
+        'MAX_JOBS': '4',
     }
     for k,v in env.items(): os.environ.setdefault(k,v)
+    if torch.version.hip:
+        # ROCm: hipify + hipcc build for this GPU's gfx target (e.g. gfx1101 for RX 7800 XT)
+        os.environ.setdefault('PYTORCH_ROCM_ARCH',torch.cuda.get_device_properties(0).gcnArchName.split(':')[0])
+    elif 'TORCH_CUDA_ARCH_LIST' not in os.environ:
+        major,minor=torch.cuda.get_device_capability(); os.environ['TORCH_CUDA_ARCH_LIST']=f'{major}.{minor}'
     torch.set_num_threads(1)
     torch.cuda.init()
     _, total = torch.cuda.mem_get_info()
@@ -40,7 +45,7 @@ def load(model_dir, store, chunk=2048, cache_tokens=16384, ram_gb=6.0, cpu=False
         import importlib.util
         for module, directory, name in ((nv_tier,'nv','qwen38_nv'),
                                         (expert_cache,'ec','qwen38_ec'), (nv2,'nv2','qwen38_nv2')):
-            path=ROOT/'qwen38-flash-offload'/'build'/directory/(name+'.so')
+            path=ROOT/'qwen38-flash-offload'/'build'/directory/(name+('.pyd' if os.name=='nt' else '.so'))
             spec=importlib.util.spec_from_file_location(name,path)
             native=importlib.util.module_from_spec(spec); spec.loader.exec_module(native)
             module._EXT=native

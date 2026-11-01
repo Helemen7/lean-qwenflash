@@ -17,7 +17,9 @@
 #include <mutex>
 #include <condition_variable>
 #include <deque>
+#ifndef _WIN32
 #include <execinfo.h>
+#endif
 #include <signal.h>
 #include "ft_core.h"
 #include "ft_n135.h"
@@ -40,8 +42,6 @@ static inline void cpu_moe_forward(Pool& pool, const Layer& L, const float* x, i
     else moe_forward(pool, L, x, ntok, route, out, mode, pt);
 }
 #include "nv2_shared.h"
-#include <sys/mman.h>
-#include <fcntl.h>
 
 using namespace nv2s;
 void dev_bind(pybind11::module& m);
@@ -55,11 +55,11 @@ constexpr int64_t B70_SIZE = ((B70_OFF_OUT + 64LL * 4096 * 2 + 4095) / 4096) * 4
 enum { B70_W_MAGIC = 0, B70_W_STATE = 4, B70_W_LOAD_SEQ = 6, B70_W_LOAD_ACK = 7, B70_W_NKEYS = 8, B70_W_REQ_SEQ = 9,
        B70_W_DONE_SEQ = 10, B70_W_ERR = 11, B70_W_NSLOTS = 18, B70_W_HEARTBEAT = 19 };
 
-static inline long long realtime_ns() { struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts); return (long long) ts.tv_sec * 1000000000LL + ts.tv_nsec; }
+static inline long long realtime_ns() { return qw_realtime_ns(); }
 static inline double now_ms() { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 static inline void cpu_relax() { _mm_pause(); }
-static void pin_self(int cpu) { if (cpu < 0) return; cpu_set_t s; CPU_ZERO(&s); CPU_SET(cpu, &s); pthread_setaffinity_np(pthread_self(), sizeof(s), &s); }
-static void pin_self_set(const std::vector<int>& cpus) { if (cpus.empty()) return; cpu_set_t s; CPU_ZERO(&s); for (int c : cpus) CPU_SET(c, &s); pthread_setaffinity_np(pthread_self(), sizeof(s), &s); }
+static void pin_self(int cpu) { qw_pin_thread(cpu); }
+static void pin_self_set(const std::vector<int>& cpus) { qw_pin_thread_set(cpus); }
 
 // ------------------------------------------------------------------------------------------------------------
 // reader pool
@@ -106,7 +106,7 @@ struct Reader
             int64_t done = 0; int err = 0;
             while (done < p.len)
             {
-                ssize_t r = pread(p.fd, (void*) (p.dst + done), size_t(p.len - done), off_t(p.off + done));
+                ssize_t r = qw_pread(p.fd, (void*) (p.dst + done), size_t(p.len - done), p.off + done);
                 if (r < 0) { if (errno == EINTR) continue; err = errno; break; }
                 if (r == 0) { err = -1; break; }
                 done += r;
@@ -884,6 +884,7 @@ struct Engine
 // ------------------------------------------------------------------------------------------------------------
 // python API
 // ------------------------------------------------------------------------------------------------------------
+#ifndef _WIN32
 static struct sigaction g_old_segv;
 static void segv_handler(int sig, siginfo_t* si, void* uc)
 {
@@ -896,6 +897,7 @@ static void segv_handler(int sig, siginfo_t* si, void* uc)
     sigaction(SIGSEGV, &g_old_segv, nullptr);
     raise(sig);
 }
+#endif
 
 void init(int64_t L, int64_t E, int64_t H, int64_t I, int64_t rec_bytes, int64_t slot_bytes, int64_t piece, int64_t off_u,
           int64_t off_d, int64_t fd, int64_t ph, int64_t hc, int64_t req, int64_t rep, int64_t wbl, int64_t adml, int64_t land,
@@ -904,11 +906,13 @@ void init(int64_t L, int64_t E, int64_t H, int64_t I, int64_t rec_bytes, int64_t
           at::Tensor vring)
 {
     TORCH_CHECK(G == nullptr, "nv2 engine already initialised");
+#ifndef _WIN32
     {
         struct sigaction sa; memset(&sa, 0, sizeof(sa));
         sa.sa_sigaction = segv_handler; sa.sa_flags = SA_SIGINFO;
         sigaction(SIGSEGV, &sa, &g_old_segv);
     }
+#endif
     G = new Engine();
     Engine& e = *G;
     e.L = int(L); e.E = int(E); e.K = int(L * E); e.H = int(H); e.I = int(I);
@@ -1057,7 +1061,7 @@ int64_t read_sync(int64_t key, int64_t dst)
     int64_t done = 0;
     while (done < e.slot_bytes)
     {
-        ssize_t r = pread(e.fd, (void*) (dst + done), size_t(e.slot_bytes - done), off_t(key * e.rec_bytes + done));
+        ssize_t r = qw_pread(e.fd, (void*) (dst + done), size_t(e.slot_bytes - done), key * e.rec_bytes + done);
         if (r <= 0) { if (r < 0 && errno == EINTR) continue; return -1; }
         done += r;
     }
@@ -1107,9 +1111,9 @@ void cpu_init(int64_t threads, std::vector<int64_t> cpus, int64_t mode, double a
     Engine& e = *G;
     init_perm(); init_tables(); cpu_kern_init();
     std::vector<int> c(cpus.begin(), cpus.end());
-    cpu_set_t saved; sched_getaffinity(0, sizeof(saved), &saved);
+    const QwAffinity saved = qw_get_affinity();
     e.pool.start(int(threads), c);
-    sched_setaffinity(0, sizeof(saved), &saved);
+    qw_set_affinity(saved);
     e.cpu_mode = int(mode);
     g_act_limit = float(act_limit);
     e.layers.resize(e.L);
@@ -1185,11 +1189,16 @@ void b70_test_engine(int64_t L, int64_t E, int64_t H)
 int64_t b70_attach(std::string path, at::Tensor keys, double load_timeout_s)
 {
     Engine& e = *G;
+#ifdef _WIN32
+    TORCH_CHECK(false, "b70: the Intel co-processor ring is Linux-only");
+    void* p = nullptr;
+#else
     const int fd = open(path.c_str(), O_RDWR);
     TORCH_CHECK(fd >= 0, "b70: cannot open ring ", path);
     void* p = mmap(nullptr, B70_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     close(fd);
     TORCH_CHECK(p != MAP_FAILED, "b70: mmap failed");
+#endif
     e.b70r = (uint8_t*) p;
     volatile int64_t* h = e.b70h();
     TORCH_CHECK(h[B70_W_MAGIC] == B70_MAGIC, "b70: bad ring magic");

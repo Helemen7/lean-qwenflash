@@ -557,11 +557,13 @@ async def health():
 
 if __name__ == "__main__":
     import faulthandler, signal
-    faulthandler.register(signal.SIGUSR1, all_threads=True)
+    if hasattr(signal, "SIGUSR1"):
+        faulthandler.register(signal.SIGUSR1, all_threads=True)
     load()
     if os.environ.get("QWEN38_MAIN_CPUS"):   # N119: GPU-feeding thread off the CPU-tier cores
         import nv2
-        os.sched_setaffinity(0, set(nv2._cpus(os.environ["QWEN38_MAIN_CPUS"])))
+        import plat
+        plat.set_affinity(set(nv2._cpus(os.environ["QWEN38_MAIN_CPUS"])))
         torch.set_num_threads(int(os.environ.get("QWEN38_TORCH_THREADS", "1")))   # no spinning OpenMP pool on the tier cores
-        print(f" -- main thread on cpus {sorted(os.sched_getaffinity(0))}", flush=True)
+        print(f" -- main thread on cpus {plat.get_affinity()}", flush=True)
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")

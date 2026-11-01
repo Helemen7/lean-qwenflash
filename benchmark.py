@@ -57,6 +57,9 @@ def main():
     def save():
         tmp=out.with_suffix('.tmp'); tmp.write_text(json.dumps(result,indent=2)); tmp.replace(out)
     def mem():
+        if os.name=='nt':
+            return {'memory.current':host_memory.sample(),'memory.sampled_peak':host_memory.peak,
+                    'memory.kernel_historical_peak':host_memory.peak}
         cg=Path(os.environ.get('QWEN_MEMORY_CGROUP','/sys/fs/cgroup'))
         return {'memory.current':int((cg/'memory.current').read_text()),
                 'memory.sampled_peak':host_memory.peak,
