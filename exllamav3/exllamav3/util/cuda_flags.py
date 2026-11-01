@@ -237,14 +237,34 @@ def patch_hipify_none_paths() -> None:
     hipify_python._none_paths_patched = True
 
 
-def _needs_hipcc(path: str) -> bool:
-    """Host .cpp that pulls in CUDA/HIP/torch-CUDA headers: HIP's headers need clang, MSVC cl cannot parse them."""
+_GPU_INCLUDE = None
+
+
+def _needs_hipcc(path: str, root: str, _seen = None) -> bool:
+    """Host source that uses GPU headers, directly or through a local header: HIP's headers need clang, cl cannot parse them."""
     import re
+    global _GPU_INCLUDE
+    if _GPU_INCLUDE is None:
+        _GPU_INCLUDE = re.compile(r'#\s*include\s*[<"][^>"]*(cuda|hip|THC)', re.I)
+    _seen = _seen if _seen is not None else set()
+    path = os.path.abspath(path)
+    if path in _seen:
+        return False
+    _seen.add(path)
     try:
         text = open(path, encoding = "utf-8", errors = "ignore").read()
     except OSError:
         return False
-    return re.search(r'#\s*include\s*[<"][^>"]*(cuda|hip|THC)', text, re.I) is not None or "c10::cuda" in text or "at::cuda" in text
+    if _GPU_INCLUDE.search(text) or "c10::cuda" in text or "at::cuda" in text:
+        return True
+    for inc in re.findall(r'#\s*include\s*"([^"]+)"', text):
+        if inc.endswith(".cuh"):   # hipify prepends the HIP runtime header to every .cuh
+            return True
+        for base in (os.path.dirname(path), root):
+            cand = os.path.normpath(os.path.join(base, inc))
+            if os.path.isfile(cand) and _needs_hipcc(cand, root, _seen):
+                return True
+    return False
 
 
 def stage_sources(src_dir: str, dst_dir: str, cpp_as_hip: bool = False) -> str:
@@ -265,7 +285,7 @@ def stage_sources(src_dir: str, dst_dir: str, cpp_as_hip: bool = False) -> str:
             if is_hipify_output(f):
                 continue
             a = os.path.join(root, f)
-            name = f[:-4] + "__cpp.cu" if cpp_as_hip and f.endswith(".cpp") and _needs_hipcc(a) else f
+            name = f[:-4] + "__cpp.cu" if cpp_as_hip and f.endswith(".cpp") and _needs_hipcc(a, src_dir) else f
             b = os.path.join(out, name)
             if not os.path.exists(b) or os.stat(a).st_mtime_ns != os.stat(b).st_mtime_ns or os.stat(a).st_size != os.stat(b).st_size:
                 shutil.copy2(a, b)

@@ -155,7 +155,7 @@ __global__ __launch_bounds__(PUBF_T) void nv_pub_fast_k(const int64_t* __restric
     const int e = t;
     const bool f = e < E && cnt[e] > 0;
     const bool g = do_pf && e < E && pfm[e];
-    const unsigned bf = __ballot_sync(0xffffffffu, f), bg = __ballot_sync(0xffffffffu, g);
+    const unsigned bf = QW_BALLOT(f), bg = QW_BALLOT(g);
     const unsigned lt = (1u << lane) - 1u;
     if (lane == 0) { wsum[wp] = __popc(bf); wsum2[wp] = __popc(bg); }
     __syncthreads();

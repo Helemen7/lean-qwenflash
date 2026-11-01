@@ -58,7 +58,7 @@ def ext():
         d = os.environ.get("QWEN38_NV2_BUILD", os.path.join(root, "build", "nv2"))
         os.makedirs(d, exist_ok=True)
         host = "nv2_host.cpp"
-        if plat.IS_WIN and torch.version.hip:
+        if torch.version.hip:
             # hipify only rewrites sources inside the build dir, and hipcc (clang) must build the host code
             here = plat.stage_tree(here, os.path.join(d, "src"), {"nv2_host.cpp": "nv2_host__cpp.cu"})
             host = "nv2_host__cpp.cu"

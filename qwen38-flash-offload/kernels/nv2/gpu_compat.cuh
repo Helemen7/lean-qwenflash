@@ -13,6 +13,8 @@ __device__ __forceinline__ unsigned long long qw_gtime_ns()
     return (unsigned long long) wall_clock64() * (1000000ull / QW_WALLCLOCK_KHZ);
 }
 #define QW_NANOSLEEP(ns) __builtin_amdgcn_s_sleep(4)
+// HIP warp-sync builtins take 64-bit masks
+#define QW_BALLOT(p) ((unsigned) __ballot_sync(0xffffffffffffffffull, (p)))
 #define QW_LDCV(p) (*(const volatile float*) (p))
 #else
 __device__ __forceinline__ unsigned long long qw_gtime_ns()
@@ -20,5 +22,6 @@ __device__ __forceinline__ unsigned long long qw_gtime_ns()
     unsigned long long t; asm volatile("mov.u64 %0, %%globaltimer;" : "=l"(t)); return t;
 }
 #define QW_NANOSLEEP(ns) __nanosleep(ns)
+#define QW_BALLOT(p) __ballot_sync(0xffffffffu, (p))
 #define QW_LDCV(p) __ldcv(p)
 #endif
