@@ -12,7 +12,7 @@
 //                      bounded queue depth, several layers ahead) and H2Ds them into the VRAM staging buffers
 // Eviction never touches a key of the request being served, a pinned slot, an in-flight read, or a landing slot.
 #include <torch/extension.h>
-#include <cuda_runtime.h>
+#include "host_gpu.h"
 #include <pybind11/pybind11.h>
 #include <mutex>
 #include <condition_variable>

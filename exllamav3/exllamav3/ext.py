@@ -101,8 +101,12 @@ else:
         # NOMINMAX: windows.h otherwise defines min/max function-like macros that break every
         # std::min/std::max call site parsed after it (WIN32_LEAN_AND_MEAN does not suppress them).
         # Defined globally so it holds regardless of include order in any TU (mirrors setup.py).
-        extra_cflags += ["/Ox", "/Zc:preprocessor", "/DWIN32_LEAN_AND_MEAN", "/DNOMINMAX"]
-        extra_cuda_cflags += ["-DWIN32_LEAN_AND_MEAN", "-DNOMINMAX", "-Xcompiler=/Zc:preprocessor"]
+        if torch.version.hip:
+            # torch hands extra_cflags to hipcc (clang) as well as cl, so only options both accept
+            extra_cflags += ["-O2", "-DWIN32_LEAN_AND_MEAN", "-DNOMINMAX"]
+        else:
+            extra_cflags += ["/Ox", "/Zc:preprocessor", "/DWIN32_LEAN_AND_MEAN", "/DNOMINMAX"]
+            extra_cuda_cflags += ["-DWIN32_LEAN_AND_MEAN", "-DNOMINMAX", "-Xcompiler=/Zc:preprocessor"]
         if ext_debug:
             extra_cflags += ["/Zi"]
             extra_cuda_cflags += []
@@ -135,7 +139,7 @@ else:
     extra_ldflags = []
 
     if windows:
-        extra_ldflags += ["cublas.lib"]
+        extra_ldflags += ["hipblas.lib" if torch.version.hip else "cublas.lib"]
         if sys.base_prefix != sys.prefix:
             extra_ldflags += [f"/LIBPATH:{os.path.join(sys.base_prefix, 'libs')}"]
     elif torch.version.hip:
