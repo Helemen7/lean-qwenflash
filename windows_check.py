@@ -59,8 +59,16 @@ def _():
         f = Path(d) / 'x.bin'; f.write_bytes(bytes(range(256)) * 4096 * 4)   # 4 MiB
         fd = plat.open_direct(f)
         if plat.IS_WIN:
-            rd = ctypes.cdll.msvcrt._read; rd.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint]
-            n = rd(fd, a, 1 << 20)
+            # same call as qw_pread: ReadFile on the CRT fd's handle with an explicit offset
+            k32 = ctypes.WinDLL('kernel32', use_last_error=True)
+            class OV(ctypes.Structure):
+                _fields_ = [('i', ctypes.c_size_t), ('ih', ctypes.c_size_t), ('off', ctypes.c_uint32), ('offh', ctypes.c_uint32), ('ev', ctypes.c_void_p)]
+            k32.ReadFile.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32), ctypes.POINTER(OV)]
+            import msvcrt
+            got = ctypes.c_uint32(0); ov = OV(); ov.off = 1 << 20
+            ok = k32.ReadFile(msvcrt.get_osfhandle(fd), a, 1 << 20, ctypes.byref(got), ctypes.byref(ov))
+            assert ok, f'ReadFile failed, GetLastError={ctypes.get_last_error()}'
+            n = got.value
         else:
             n = os.readv(fd, [memoryview(buf)[:1 << 20]])
         os.close(fd)

@@ -52,6 +52,7 @@ def ext():
     global _EXT
     if _EXT is None:
         from torch.utils.cpp_extension import load
+        plat.patch_hipify_none_paths()
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         here = os.path.join(root, "kernels", "nv2")   # nv2_host.cpp, nv2_dev.cu, nv2_shared.h, ft_core.h
         d = os.environ.get("QWEN38_NV2_BUILD", os.path.join(root, "build", "nv2"))

@@ -209,6 +209,34 @@ def patch_hip_ninja_file_writer(cpp_extension) -> None:
     cpp_extension._exllamav3_ninja_patched = True
 
 
+def patch_hipify_none_paths() -> None:
+    """
+    torch.utils.cpp_extension.load() replaces each source by hipify_result[source].hipified_path without a None
+    check; hipify reports None for sources it leaves unchanged (seen with host .cpp files on Windows ROCm, torch
+    2.12 nightly), and the build then dies in object_file_path(None). Point such entries at the original file.
+    """
+    try:
+        from torch.utils.hipify import hipify_python
+    except ImportError:
+        return
+    if getattr(hipify_python, "_none_paths_patched", False):
+        return
+    orig = hipify_python.hipify
+
+    def hipify(*args, **kwargs):
+        result = orig(*args, **kwargs)
+        try:
+            for src, res in result.items():
+                if getattr(res, "hipified_path", 0) is None:
+                    res.hipified_path = src
+        except (AttributeError, TypeError):
+            pass
+        return result
+
+    hipify_python.hipify = hipify
+    hipify_python._none_paths_patched = True
+
+
 def hip_include_flags(sources_dir: str) -> list[str]:
     """
     Flags for every translation unit of a ROCm build, host C++ and HIP alike: force-include the compat
