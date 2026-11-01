@@ -154,7 +154,7 @@ else:
     if windows and torch.version.hip:
         # torch hipifies only sources inside the build directory (see stage_sources)
         build_directory = torch.utils.cpp_extension._get_build_directory(extension_name, False)
-        sources_dir = stage_sources(sources_dir, os.path.join(build_directory, "src"))
+        sources_dir = stage_sources(sources_dir, os.path.join(build_directory, "src"), cpp_as_hip = True)
     sources = extension_sources(sources_dir, hip = bool(torch.version.hip))
     if torch.version.hip:
         # With no target list, torch builds for every architecture it supports, wave64 ones included, which

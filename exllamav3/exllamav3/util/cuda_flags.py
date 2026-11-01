@@ -237,11 +237,23 @@ def patch_hipify_none_paths() -> None:
     hipify_python._none_paths_patched = True
 
 
-def stage_sources(src_dir: str, dst_dir: str) -> str:
+def _needs_hipcc(path: str) -> bool:
+    """Host .cpp that pulls in CUDA/HIP/torch-CUDA headers: HIP's headers need clang, MSVC cl cannot parse them."""
+    import re
+    try:
+        text = open(path, encoding = "utf-8", errors = "ignore").read()
+    except OSError:
+        return False
+    return re.search(r'#\s*include\s*[<"][^>"]*(cuda|hip|THC)', text, re.I) is not None or "c10::cuda" in text or "at::cuda" in text
+
+
+def stage_sources(src_dir: str, dst_dir: str, cpp_as_hip: bool = False) -> str:
     """
     Copy a source tree into dst_dir (only files that changed) and return dst_dir. torch's JIT hipify only
     rewrites sources that sit inside the build directory: on Windows, files elsewhere come back unchanged
     (hipified_path None), so a ROCm build compiles untranslated CUDA includes. Staging them there fixes it.
+    cpp_as_hip: copy host .cpp files that use GPU headers as <name>__cpp.cu, so torch builds them with hipcc
+    (clang) instead of cl.
     """
     import shutil
     src_dir, dst_dir = os.path.abspath(src_dir), os.path.abspath(dst_dir)
@@ -252,7 +264,9 @@ def stage_sources(src_dir: str, dst_dir: str) -> str:
         for f in files:
             if is_hipify_output(f):
                 continue
-            a, b = os.path.join(root, f), os.path.join(out, f)
+            a = os.path.join(root, f)
+            name = f[:-4] + "__cpp.cu" if cpp_as_hip and f.endswith(".cpp") and _needs_hipcc(a) else f
+            b = os.path.join(out, name)
             if not os.path.exists(b) or os.stat(a).st_mtime_ns != os.stat(b).st_mtime_ns or os.stat(a).st_size != os.stat(b).st_size:
                 shutil.copy2(a, b)
     return dst_dir

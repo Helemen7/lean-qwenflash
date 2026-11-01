@@ -171,6 +171,9 @@ def physical_core_order(cpus, only_first=False):
 
 # ---------------------------------------------------------------------------------------------------- build
 def cxx_flags(avx2=True):
+    import torch
+    if IS_WIN and torch.version.hip:   # host C++ is built by hipcc (clang) on ROCm
+        return ["-O3", "-std=c++17"] + (["-mavx2", "-mfma", "-mf16c"] if avx2 else [])
     if IS_WIN:
         return ["/O2", "/std:c++17", "/EHsc", "/Zc:__cplusplus", "/permissive-"] + (["/arch:AVX2"] if avx2 else [])
     return ["-O3", "-std=c++17"] + (["-mavx2", "-mfma", "-mf16c", "-mtune=znver3"] if avx2 else [])
@@ -208,15 +211,17 @@ def patch_hipify_none_paths():
     hipify_python._none_paths_patched = True
 
 
-def stage_tree(src_dir, dst_dir):
-    """Copy changed files of src_dir into dst_dir, return dst_dir (see exllamav3.util.cuda_flags.stage_sources)."""
+def stage_tree(src_dir, dst_dir, rename=None):
+    """Copy changed files of src_dir into dst_dir, return dst_dir (see exllamav3.util.cuda_flags.stage_sources).
+    rename: {file name: staged name}, e.g. a host .cpp renamed to .cu so torch builds it with hipcc."""
     import shutil
+    rename = rename or {}
     for root, _, files in os.walk(src_dir):
         rel = os.path.relpath(root, src_dir)
         out = dst_dir if rel == "." else os.path.join(dst_dir, rel)
         os.makedirs(out, exist_ok=True)
         for f in files:
-            a, b = os.path.join(root, f), os.path.join(out, f)
+            a, b = os.path.join(root, f), os.path.join(out, rename.get(f, f))
             if not os.path.exists(b) or os.stat(a).st_mtime_ns != os.stat(b).st_mtime_ns or os.stat(a).st_size != os.stat(b).st_size:
                 shutil.copy2(a, b)
     return dst_dir

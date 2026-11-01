@@ -23,6 +23,8 @@
 #include <malloc.h>
 #ifdef _MSC_VER
 typedef SSIZE_T ssize_t;
+#endif
+#if defined(_MSC_VER) && !defined(__clang__)
 #define __restrict__ __restrict
 #define __attribute__(x)
 #endif
