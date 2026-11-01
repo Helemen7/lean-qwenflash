@@ -287,6 +287,11 @@ def stage_sources(src_dir: str, dst_dir: str, cpp_as_hip: bool = False) -> str:
             a = os.path.join(root, f)
             name = f[:-4] + "__cpp.cu" if cpp_as_hip and f.endswith(".cpp") and _needs_hipcc(a, src_dir) else f
             b = os.path.join(out, name)
+            if name != f:
+                # an earlier staging may have left the plain copy, which would be built by cl as well
+                stale = os.path.join(out, f)
+                if os.path.exists(stale):
+                    os.remove(stale)
             if not os.path.exists(b) or os.stat(a).st_mtime_ns != os.stat(b).st_mtime_ns or os.stat(a).st_size != os.stat(b).st_size:
                 shutil.copy2(a, b)
     return dst_dir
